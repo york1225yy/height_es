@@ -45,6 +45,8 @@ COCO 17 关键点索引与语义：
       print(r["person_id"], r["height"])
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
