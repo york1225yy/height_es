@@ -35,6 +35,13 @@ import time        # 时间模块，用于计算帧率
 import cv2         # OpenCV，用于视频读写和图像绘制
 import numpy as np # NumPy，用于数组运算
 
+# 检测是否为无头（无显示器）环境
+# 在服务器/容器中没有 DISPLAY 环境变量，无法使用 cv2.imshow
+_HEADLESS = not bool(os.environ.get('DISPLAY', ''))
+if _HEADLESS:
+    # 使用不需要 GUI 的 OpenCV 后端
+    os.environ.setdefault('OPENCV_IO_ENABLE_OPENEXR', '0')
+
 # 导入 face_recognition 库
 # 如果未安装，请执行：pip install face_recognition
 try:
@@ -267,8 +274,9 @@ def process_frame(frame, known_encodings, known_names, detection_model, scale, t
     # 步骤 2：颜色空间转换 BGR -> RGB
     # OpenCV 默认使用 BGR 格式，而 face_recognition 需要 RGB 格式
     # 使用 [:, :, ::-1] 翻转颜色通道顺序
+    # 注意：需要 np.ascontiguousarray 确保内存连续，否则 dlib 会报类型错误
     # ----------------------------------------------------------
-    rgb_small_frame = small_frame[:, :, ::-1]
+    rgb_small_frame = np.ascontiguousarray(small_frame[:, :, ::-1])
 
     # ----------------------------------------------------------
     # 步骤 3：检测人脸位置
@@ -568,6 +576,14 @@ def parse_arguments():
         help="结果视频保存路径（可选，如 output.avi）；不指定则不保存"
     )
 
+    parser.add_argument(
+        '--no-display',
+        action='store_true',
+        default=False,
+        dest='no_display',
+        help="无头模式：不显示视频窗口（在无显示器的服务器上自动启用）"
+    )
+
     return parser.parse_args()
 
 
@@ -603,6 +619,11 @@ def main():
     if args.output:
         print(f"  输出视频：{args.output}")
     print("=" * 55)
+
+    # 若检测到无头环境，强制启用 no_display
+    if _HEADLESS and not args.no_display:
+        args.no_display = True
+        print("[信息] 检测到无显示器环境，自动启用无头模式（--no-display）")
 
     # ----------------------------------------------------------
     # 步骤 2：确定推理模型
@@ -722,25 +743,35 @@ def main():
             video_writer.write(frame)
 
         # ——— 显示视频窗口 ———
-        window_title = "人脸识别演示 - face_recognition"
-        cv2.imshow(window_title, frame)
+        if not args.no_display:
+            window_title = "人脸识别演示 - face_recognition"
+            cv2.imshow(window_title, frame)
+
+        # ——— 无头模式：每 50 帧打印一次进度 ———
+        if args.no_display and frame_count % 50 == 0:
+            face_info = ", ".join(
+                f"{name}({sim:.0f}%)" if name != "Unknown" else "Unknown"
+                for (_, name, sim) in last_results
+            ) or "无人脸"
+            print(f"  [帧 {frame_count:04d}] FPS={current_fps:.1f}  检测到 {len(last_results)} 张人脸：{face_info}")
 
         # ——— 处理键盘输入 ———
         # cv2.waitKey(1) 等待 1ms，返回按键的 ASCII 码
         # & 0xFF 确保在 64 位系统上正常工作
-        key = cv2.waitKey(1) & 0xFF
+        if not args.no_display:
+            key = cv2.waitKey(1) & 0xFF
 
-        if key == ord('q'):
-            # 按 'q' 退出程序
-            print("[信息] 用户按下 'q' 键，退出程序")
-            break
+            if key == ord('q'):
+                # 按 'q' 退出程序
+                print("[信息] 用户按下 'q' 键，退出程序")
+                break
 
-        elif key == ord('s'):
-            # 按 's' 保存当前帧截图
-            screenshot_count += 1
-            screenshot_path = f"screenshot_{screenshot_count:04d}.jpg"
-            cv2.imwrite(screenshot_path, frame)
-            print(f"[截图] 已保存截图：{screenshot_path}")
+            elif key == ord('s'):
+                # 按 's' 保存当前帧截图
+                screenshot_count += 1
+                screenshot_path = f"screenshot_{screenshot_count:04d}.jpg"
+                cv2.imwrite(screenshot_path, frame)
+                print(f"[截图] 已保存截图：{screenshot_path}")
 
     # ----------------------------------------------------------
     # 步骤 8：释放资源
@@ -751,7 +782,7 @@ def main():
         video_writer.release()  # 关闭视频写入器，确保文件正确保存
         print(f"[信息] 输出视频已保存至：{args.output}")
 
-    cv2.destroyAllWindows()  # 关闭所有 OpenCV 窗口
+    cv2.destroyAllWindows()  # 关闭所有 OpenCV 窗口（有头模式下）
 
     # ——— 打印运行统计信息 ———
     print("\n" + "=" * 55)
